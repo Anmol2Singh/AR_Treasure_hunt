@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AR Treasure Hunt</string>
+    <string name="title_activity_main">AR Treasure Hunt</string>
+    <string name="package_name">com.anmol.artreasurehunt</string>
+    <string name="custom_url_scheme">com.anmol.artreasurehunt</string>
+</resources>
