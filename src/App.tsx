@@ -2,21 +2,56 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { HelpCircle, MapPin, Target, ChevronRight, Play, QrCode, Trophy, Eye } from 'lucide-react';
+import { App as CapApp } from '@capacitor/app';
 import { Scanner } from './components/Scanner';
 import { MarkersDemo } from './components/MarkersDemo';
 import { ARObjectOverlay } from './components/ARObjectOverlay';
+import { playClickSound, playSuccessChime, playErrorSound } from './lib/audio';
 import { TREASURE_HUNT_STEPS } from './constants';
-import { playSuccessChime, playErrorSound, playClickSound } from './lib/audio';
+import { Leaderboard } from './components/Leaderboard';
 
-type View = 'home' | 'playing' | 'completed' | 'markers';
+import { SplashScreen } from './components/SplashScreen';
+
+type View = 'splash' | 'home' | 'playing' | 'completed' | 'markers' | 'leaderboard' | 'name_input';
 type GameState = 'scanning' | 'found' | 'clue';
 
 export default function App() {
-  const [view, setView] = useState<View>('home');
+  const [view, setView] = useState<View>('splash');
   const [stepIndex, setStepIndex] = useState(0);
   const [gameState, setGameState] = useState<GameState>('scanning');
   const [showHelp, setShowHelp] = useState(false);
+  const [playerName, setPlayerName] = useState('');
+  const [score, setScore] = useState(0);
+  const [stepStartTime, setStepStartTime] = useState(0);
+  const [totalStartTime, setTotalStartTime] = useState(0);
   const lastScannedRef = useRef<number>(0);
+
+  // Handle Back Navigation
+  useEffect(() => {
+    const backListener = CapApp.addListener('backButton', () => {
+      handleBack();
+    });
+
+    return () => {
+      backListener.then(l => l.remove());
+    };
+  }, [view]);
+
+  const handleBack = () => {
+    if (view === 'home') {
+      if (window.confirm('Do you want to exit the app?')) {
+        CapApp.exitApp();
+      }
+    } else if (view === 'name_input' || view === 'markers' || view === 'leaderboard') {
+      setView('home');
+    } else if (view === 'playing') {
+      if (window.confirm('Quit the current quest and return home?')) {
+        setView('home');
+      }
+    } else if (view === 'completed') {
+      setView('home');
+    }
+  };
 
   const currentStep = TREASURE_HUNT_STEPS[stepIndex];
   
@@ -52,9 +87,16 @@ export default function App() {
   }, [view]);
 
   const handleStart = () => {
-    // Initiate audio context immediately on first explicit user gesture
     playClickSound();
+    setView('name_input');
+  };
+
+  const startAdventure = (name: string) => {
+    setPlayerName(name);
     setStepIndex(0);
+    setScore(0);
+    setStepStartTime(Date.now());
+    setTotalStartTime(Date.now());
     setGameState('scanning');
     setView('playing');
   };
@@ -84,19 +126,72 @@ export default function App() {
 
   const handleNextClue = () => {
     playClickSound();
+    
+    // Calculate score for the step just completed
+    const timeTaken = Math.floor((Date.now() - stepStartTime) / 1000);
+    const stepScore = 100 + Math.max(0, 100 - timeTaken);
+    setScore(prev => prev + stepScore);
+
     if (stepIndex === TREASURE_HUNT_STEPS.length - 1) {
+      const totalTime = Math.floor((Date.now() - totalStartTime) / 1000);
+      const finalScore = score + stepScore;
+      
+      // Import and save score
+      import('./lib/leaderboard').then(({ saveScore }) => {
+        saveScore({
+          name: playerName,
+          score: finalScore,
+          time: totalTime,
+          date: new Date().toISOString()
+        });
+      });
+      
       setView('completed');
     } else {
       setStepIndex(stepIndex + 1);
+      setStepStartTime(Date.now());
       setGameState('scanning');
     }
   };
 
-  if (view === 'markers') return <MarkersDemo />;
+  if (view === 'markers') return <MarkersDemo onBack={() => setView('home')} />;
+  if (view === 'leaderboard') return <div className="fixed inset-0 bg-slate-950 flex items-center justify-center p-6"><Leaderboard onBack={() => setView('home')} /></div>;
+
+  const NameInput = () => {
+    const [name, setName] = useState('');
+    return (
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex flex-col items-center p-8 max-w-md w-full bg-slate-900 rounded-[40px] border border-white/10 shadow-2xl"
+      >
+        <h2 className="text-2xl font-bold text-white mb-6 italic text-center">Identity Yourself, Explorer</h2>
+        <input 
+          autoFocus
+          type="text" 
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Enter your name..."
+          className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 text-white text-lg focus:outline-none focus:border-cyan-500 transition-all mb-6"
+          onKeyDown={(e) => e.key === 'Enter' && name.trim() && startAdventure(name)}
+        />
+        <button 
+          disabled={!name.trim()}
+          onClick={() => startAdventure(name)}
+          className="w-full py-4 bg-cyan-500 text-white rounded-2xl font-bold uppercase tracking-widest text-sm shadow-lg shadow-cyan-500/20 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
+        >
+          Begin Quest
+        </button>
+      </motion.div>
+    );
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-950 text-slate-100 font-sans overflow-hidden flex flex-col items-center justify-center">
       
+      {/* SPLASH SCREEN */}
+      {view === 'splash' && <SplashScreen onComplete={() => setView('home')} />}
+
       {/* HOME VIEW */}
       <AnimatePresence mode="wait">
         {view === 'home' && (
@@ -107,8 +202,13 @@ export default function App() {
             exit={{ opacity: 0, scale: 0.95 }}
             className="flex flex-col items-center p-8 max-w-md w-full"
           >
-             <div className="w-24 h-24 bg-gradient-to-tr from-cyan-500 to-blue-600 rounded-3xl shadow-[0_0_20px_rgba(34,211,238,0.5)] transform rotate-12 flex items-center justify-center mb-8">
-               <MapPin className="w-12 h-12 text-white -rotate-12" />
+             <div className="w-32 h-32 mb-8 relative">
+               <div className="absolute inset-0 bg-cyan-500 blur-3xl opacity-20 rounded-full animate-pulse"></div>
+               <img 
+                 src="/assets/logo.png" 
+                 alt="AR Treasure Hunt Logo" 
+                 className="w-full h-full object-cover rounded-[2.5rem] shadow-[0_0_30px_rgba(34,211,238,0.3)] border border-white/10 relative z-10"
+               />
              </div>
              
              <h1 className="text-4xl font-bold text-center text-cyan-400 mb-4 italic">
@@ -125,16 +225,25 @@ export default function App() {
                >
                  <Play className="w-5 h-5 fill-current" /> Start Adventure
                </button>
-               
-               <button 
-                 onClick={() => setView('markers')}
-                 className="w-full flex items-center justify-center gap-2 bg-white/10 backdrop-blur-md border border-white/20 text-white font-bold text-sm uppercase tracking-widest py-4 px-8 rounded-2xl transition-all active:scale-95 hover:bg-white/20"
-               >
-                 <QrCode className="w-5 h-5" /> Print Demo Markers
-               </button>
-             </div>
+                              <button 
+                  onClick={() => setView('markers')}
+                  className="w-full flex items-center justify-center gap-2 bg-white/10 backdrop-blur-md border border-white/20 text-white font-bold text-sm uppercase tracking-widest py-4 px-8 rounded-2xl transition-all active:scale-95 hover:bg-white/20"
+                >
+                  <QrCode className="w-5 h-5" /> Print Demo Markers
+                </button>
+
+                <button 
+                  onClick={() => setView('leaderboard')}
+                  className="w-full flex items-center justify-center gap-2 bg-cyan-500/10 backdrop-blur-md border border-cyan-500/20 text-cyan-400 font-bold text-sm uppercase tracking-widest py-4 px-8 rounded-2xl transition-all active:scale-95 hover:bg-cyan-500/20"
+                >
+                  <Trophy className="w-5 h-5" /> Leaderboard
+                </button>
+              </div>
           </motion.div>
         )}
+
+        {/* NAME INPUT VIEW */}
+        {view === 'name_input' && <NameInput />}
 
         {/* PLAYING VIEW */}
         {view === 'playing' && (
@@ -156,12 +265,12 @@ export default function App() {
              
              {/* TOP HUD */}
              <div className="absolute top-0 left-0 right-0 p-6 pt-safe z-40 flex justify-between items-center pointer-events-none">
-                <div className="flex items-center space-x-2 bg-black/40 backdrop-blur-md rounded-full px-3 py-1.5 border border-white/10 pointer-events-auto">
-                   <div className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]"></div>
-                   <span className="text-[10px] font-bold uppercase tracking-wider text-white">
-                     Phase 0{stepIndex + 1} / 0{TREASURE_HUNT_STEPS.length}
-                   </span>
-                </div>
+                 <div className="flex items-center space-x-2 bg-black/40 backdrop-blur-md rounded-full px-3 py-1.5 border border-white/10 pointer-events-auto">
+                    <div className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]"></div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-white">
+                      {score} PTS
+                    </span>
+                 </div>
                 
                 <button 
                   onClick={() => { playClickSound(); setShowHelp(true); }}
@@ -248,12 +357,18 @@ export default function App() {
                <div className="absolute inset-0 bg-amber-500 blur-3xl opacity-40 rounded-full animate-pulse"></div>
                <Trophy className="w-40 h-40 text-amber-400 drop-shadow-2xl relative z-10" />
              </div>
-             <h1 className="text-4xl font-bold mb-6 text-transparent bg-clip-text bg-gradient-to-r from-amber-200 to-yellow-500">
-               Treasure Found!
-             </h1>
-             <p className="text-slate-300 text-lg mb-12">
-               You successfully completed the AR Treasure Hunt. Excellent tracking skills!
-             </p>
+              <h1 className="text-4xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-amber-200 to-yellow-500">
+                Quest Complete!
+              </h1>
+              <p className="text-cyan-400 font-black text-5xl mb-4 drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]">
+                {score}
+              </p>
+              <p className="text-slate-400 text-sm uppercase tracking-[0.2em] font-bold mb-8">
+                Final Score
+              </p>
+              <p className="text-slate-300 text-base mb-12">
+                Congratulations <span className="text-white font-bold">{playerName}</span>! You've successfully retrieved the artifacts.
+              </p>
              
              <button 
                onClick={() => { playClickSound(); setView('home'); }}
